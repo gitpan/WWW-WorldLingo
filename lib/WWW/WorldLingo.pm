@@ -4,10 +4,11 @@ use strict;
 use warnings;
 use Carp;
 
-our $VERSION  = "0.01";
+our $VERSION  = "0.02";
 
 __PACKAGE__->mk_accessors(qw( server
-                              api agent mimetype encoding
+                              agent mimetype encoding
+                              scheme
                               subscription password 
                               srclang trglang srcenc trgenc
                               dictno gloss
@@ -18,7 +19,6 @@ __PACKAGE__->mk_ro_accessors(qw( error error_code ));
 
 use HTTP::Request::Common;
 use LWP::UserAgent;
-use HTML::TokeParser;
 
 use constant ERROR_CODE_HEADER => "X-WL-ERRORCODE";
 
@@ -40,12 +40,10 @@ sub new : method {
     my $self = $class->SUPER::new({
                                    subscription =>"S000.1",
                                    password => "secret",
-                                   server => "http://www.worldlingo.com/",
+                                   server => "www.worldlingo.com",
+                                   scheme => "http",
                                    %{$arg_hashref || {}},
                                   });
-
-    $self->api( $self->server . $self->subscription() . "/api");
-
     unless ( $self->agent )
     {
         eval { require LWPx::ParanoidAgent; };
@@ -56,15 +54,30 @@ sub new : method {
     $self;
 }
 
+sub request : method {
+    my ( $self ) = @_;
+    $self->{_request} ||= POST $self->api, scalar $self->_arguments;
+    return $self->{_request};
+}
+
+sub api : method {
+    my ( $self ) = @_;
+    return join("://",
+                $self->scheme,
+                join("/",
+                     $self->server,
+                     $self->subscription,
+                     "api")
+                );
+}
+
 sub translate : method {
     my ( $self, $data ) = @_;
     $self->{_error} = $self->{_error_code} = undef;
 
     $self->data($data) if $data;
 
-    my $request = POST $self->api, scalar $self->_arguments;
-
-    my $response = $self->agent->request($request);
+    my $response = $self->agent->request($self->request);
 
     my $error_code = $response->header(ERROR_CODE_HEADER);
 
@@ -114,11 +127,13 @@ __END__
 
 =head1 NAME
 
-WWW::WorldLingo - tie into WorldLingo's subscription based translation service.
+WWW::WorldLingo - Tie into WorldLingo's subscription based translation service.
+
 
 =head1 VERSION
 
-0.01
+0.02
+
 
 =head1 SYNOPSIS
 
@@ -129,6 +144,7 @@ WWW::WorldLingo - tie into WorldLingo's subscription based translation service.
  my $italian = $wl->translate("Hello world")
     or die $wl->error;
  print $italian, "\n";
+
 
 =head1 DESCRIPTION
 
@@ -152,10 +168,16 @@ If you are not a subscriber, this module is mostly useless.
 Create a WWW::WorldLingo object. Can accept any of its attributes as
 arguments. Defaults to the test account WorldLingo provides.
 
-=item $wl->data
+=item $wl->data($what_to_translate)
 
 Set/get the string (src) to be translated. You can use the
 C<translate> method to feed the object its src data too.
+
+=item $wl->request
+
+If you want to bypass L<WWW::WorldLingo> manually making an HTTP
+request and take the L<HTTP::Request> object and do something with it
+yourself.
 
 =item $wl->translate([$data])
 
@@ -179,6 +201,10 @@ number. If it's from the user agent, it's the HTTP status code.
 =item $wl->api
 
 The URI for service calls.
+
+=item $wl->scheme
+
+"http" [default] or "https."
 
 =item $wl->agent
 

@@ -1,27 +1,41 @@
 use Test::More "no_plan";
-# use Test::More tests => 1;
+# use Test::More tests => 12;
 use WWW::WorldLingo;
 
-ok( my $wl = WWW::WorldLingo->new,
-    "WWW::WorldLingo->new");
-ok( $wl->srclang("en"),
-    "Setting srclang to 'en'");
-ok( $wl->trglang("it"),
-    "Setting trglang to 'it'");
-ok( $wl->data("Hello world"),
-    "Setting data to 'Hello world'");
+ok( my $wl = WWW::WorldLingo->new, "WWW::WorldLingo->new");
+
+ok( $wl->srclang("en"), "Setting srclang to 'en'");
+
+ok( $wl->trglang("it"), "Setting trglang to 'it'");
+
+ok( $wl->data("Hello world"), "Setting data to 'Hello world'");
+
 is( $wl->api(), "http://www.worldlingo.com/S000.1/api",
     "API address is correct");
+
+ok( $wl->scheme("https"), "Setting for secure request");
+
+is( $wl->api(), "https://www.worldlingo.com/S000.1/api",
+    "Secure API address is correct");
+
+isa_ok( $wl->request(), "HTTP::Request", "HTTP::Request was formed");
+
+is( $wl->request->method, "POST", "HTTP::Request is a POST request");
+
+is( $wl->request->uri, $wl->api, "HTTP::Request->uri matches \$wl->api");
 
 # Check if we have internet connection
 require IO::Socket;
 my $s = IO::Socket::INET->new(PeerAddr => "www.google.com:80",
-                              Timeout  => 10,
+                              Timeout  => 30,
                              );
 if ($s) {
     close($s);
     if ( $ENV{WORLDLINGO_TEST} )
     {
+        ok( $wl->scheme("http"), "Putting scheme back to http");
+        is( $wl->api(), "http://www.worldlingo.com/S000.1/api",
+            "API address correctly reset");
         ok( my $result = $wl->translate() );
         diag( $result );
     }
@@ -36,9 +50,6 @@ EOT
     }
 
 }
-
-
-# use Data::Dumper; print Dumper $wl;
 
 =pod
 
