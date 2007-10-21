@@ -4,27 +4,29 @@ use strict;
 use warnings;
 use Carp;
 
-our $VERSION  = "0.02";
+our $VERSION  = "0.03";
 
 __PACKAGE__->mk_accessors(qw( server
-                              agent mimetype encoding
+                              response
+                              mimetype encoding
                               scheme
                               subscription password 
                               srclang trglang srcenc trgenc
                               dictno gloss
                               data
+                              result
                               ));
 
-__PACKAGE__->mk_ro_accessors(qw( error error_code ));
-
 use HTTP::Request::Common;
+use HTTP::Response;
 use LWP::UserAgent;
 
 use constant ERROR_CODE_HEADER => "X-WL-ERRORCODE";
+use constant API_MODE_HEADER   => "X-WL-API-MODE";
 
 my %Errors = (
               0    => "Successful", # no error
-              6    => "Subscription not paid",
+              6    => "Subscription expired or suspended", # guessing here
               26   => "Incorrect password",
               28   => "Source language not in subscription",
               29   => "Target language not in subscription",
@@ -44,20 +46,41 @@ sub new : method {
                                    scheme => "http",
                                    %{$arg_hashref || {}},
                                   });
-    unless ( $self->agent )
+    $self;
+}
+
+sub agent : method {
+    my ( $self, $agent ) = @_;
+    $self->{_agent} = $agent;
+    unless ( $self->{_agent} )
     {
         eval { require LWPx::ParanoidAgent; };
         my $agent_class = $@ ? "LWP::UserAgent" : "LWPx::ParanoidAgent";
         my $ua = $agent_class->new(agent => __PACKAGE__ ."/". $VERSION);
-        $self->agent($ua);
+        $self->{_agent} = $ua;
     }
-    $self;
+    return $self->{_agent};
 }
 
 sub request : method {
-    my ( $self ) = @_;
+    my ( $self, $request ) = @_;
+    $self->{_request} = $request if $request;
     $self->{_request} ||= POST $self->api, scalar $self->_arguments;
     return $self->{_request};
+}
+
+sub parse : method {
+    my ( $class, $response ) = @_;
+    my $self = $class->new();
+    unless ( ref $response and $response->isa("HTTP::Response") )
+    {
+        $response = HTTP::Response->parse($response);
+        carp "This " . ref($self) . " object has no memory of its original request";
+    }
+    $self->_handle_response($response);
+    # responses remade from strings have *no* memory of a request in them
+    $self->request( $self->response->request ) if $self->response->request;
+    return $self;
 }
 
 sub api : method {
@@ -73,25 +96,40 @@ sub api : method {
 
 sub translate : method {
     my ( $self, $data ) = @_;
-    $self->{_error} = $self->{_error_code} = undef;
-
+    $self->{_api_mode} = $self->{_error} = $self->{_error_code} = undef;
     $self->data($data) if $data;
-
     my $response = $self->agent->request($self->request);
+#    use Data::Dumper;    warn Dumper $response;
+    $self->_handle_response($response);
+    return $self->result;
+}
 
-    my $error_code = $response->header(ERROR_CODE_HEADER);
+sub _handle_response {
+    my ( $self, $response ) = @_;
+    $self->response($response);
+    $self->{_error_code} = $response->header(ERROR_CODE_HEADER);
+    $self->{_api_mode} = $response->header(API_MODE_HEADER);
 
-    if ( $response->is_success and $Errors{$error_code} eq "Successful" )
+    if ( $response->is_success
+         and $Errors{$self->{_error_code}} eq "Successful" )
     {
-        return $response->decoded_content;
+        eval  {
+            $self->result( $response->decoded_content );
+        };
+        if ( $@ )
+        {
+            carp "Couldn't decode content with LWP library";
+            $self->result( $response->content );
+        }
+        $self->result;
     }
-    elsif ( $error_code ) # API error
+    elsif ( $self->{_error_code} ) # API error
     {
-        $self->{_error} = $Errors{$error_code} || "Unknown error!";
-        $self->{_error_code} = $error_code;
+        $self->{_error} = $Errors{$self->{_error_code}} || "Unknown error!";
     }
     elsif ( not $response->is_success  ) # Agent error
     {
+
         $self->{_error} = $response->status_line || "Unknown error!";
         $self->{_error_code} = $response->code;
     }
@@ -99,7 +137,19 @@ sub translate : method {
     {
         confess "Unhandled error";
     }
-    return;
+    return undef;
+}
+
+sub api_mode : method {
+    return $_[0]->{_api_mode};
+}
+
+sub error : method {
+    return $_[0]->{_error};
+}
+
+sub error_code : method {
+    return $_[0]->{_error_code};
 }
 
 sub _arguments : method {
@@ -109,7 +159,6 @@ sub _arguments : method {
     croak "No data given to translate" unless $self->data =~ /\w/;
     croak "No srclang set" unless $self->srclang;
     croak "No trglang set" unless $self->trglang;
-
 
     for my $arg ( qw( password srclang trglang mimetype srcenc trgenc
                       data dictno gloss) )
@@ -132,7 +181,7 @@ WWW::WorldLingo - Tie into WorldLingo's subscription based translation service.
 
 =head1 VERSION
 
-0.02
+0.03
 
 
 =head1 SYNOPSIS
@@ -159,7 +208,8 @@ If you are not a subscriber, this module is mostly useless.
 
 =head1 INTERFACE 
 
-=head3 See the WorldLingo API docs for clarification
+See the WorldLingo API docs for clarification and more information:
+http://www.worldlingo.com/
 
 =over 4
 
@@ -179,6 +229,16 @@ If you want to bypass L<WWW::WorldLingo> manually making an HTTP
 request and take the L<HTTP::Request> object and do something with it
 yourself.
 
+=item $wl->parse
+
+Likewise if you want have bypassed a C<translate> call or stored a
+response, you can reconstitute--to a degree--the L<WWW::WorldLingo>
+object by using C<parse> on the L<HTTP::Response>.
+
+Returns a L<WWW::WorldLingo> object which attempts to represent one
+which would create an identical response if sent back to the
+WorldLingo server.
+
 =item $wl->translate([$data])
 
 Perform the translation of the data and return the result (trg).
@@ -188,6 +248,10 @@ If nothing is returned, there was an error. Errors can either be set
 by the API -- you did something wrong in your call or they have a
 problem -- or the requesting agent -- you have some sort of connection
 issues.
+
+=item $wl->result
+
+What C<translate> returns.
 
 =item $wl->error
 
@@ -208,14 +272,13 @@ The URI for service calls.
 
 =item $wl->agent
 
-The web agent. Tries to use L<LWPx::ParanoidAgent>. Falls back to
-L<LWP::UserAgent>. You can provide your own as long as it's a subclass
-of L<LWP::UserAgent> (like L<WWW::Mechanize>) or a class which offers
-the same hooks into the L<HTTP::Request>s and L<HTTP::Response>s.
+The web agent. You can set your own or WWW::WorldLingo Tries to use
+L<LWPx::ParanoidAgent> and falls back to L<LWP::UserAgent> if it must.
+You can provide your own as long as it's a subclass of
+L<LWP::UserAgent> (like L<WWW::Mechanize>) or a class which offers the
+same hooks into the L<HTTP::Request>s and L<HTTP::Response>s.
 
-You will save a little overhead if you provide your agent when you
-construct your object. That will prevent the default from being
-created. You can override or change agents at any time.
+You can override or change agents at any time.
 
 =item $wl->mimetype
 
@@ -233,7 +296,7 @@ C<secret>.
 
 =item $wl->srclang
 
-The language your origial data is in.
+The language your original data is in.
 
 =item $wl->trglang
 
@@ -256,6 +319,10 @@ deal with custom terminology and filtering.
 
 WorldLingo has special glossaries to try to improve translation
 quality.
+
+=item $wl->api_mode
+
+Should come back "TEST MODE ONLY - Random Target Languages" for tests.
 
 =back
 

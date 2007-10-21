@@ -1,3 +1,5 @@
+use strict;
+use warnings;
 use Test::More "no_plan";
 # use Test::More tests => 12;
 use WWW::WorldLingo;
@@ -36,8 +38,12 @@ if ($s) {
         ok( $wl->scheme("http"), "Putting scheme back to http");
         is( $wl->api(), "http://www.worldlingo.com/S000.1/api",
             "API address correctly reset");
-        ok( my $result = $wl->translate() );
-        diag( $result );
+        ok( my $result = $wl->translate(), "Translate" );
+        is( $wl->api_mode, "TEST MODE ONLY - Random Target Languages",
+            "API mode is correct");
+        is( $result, $wl->result,
+            "Result is equal to return value for translation");
+        diag( $wl->result );
     }
     else
     {
@@ -55,6 +61,7 @@ EOT
 
 Bonjour monde
 Hallo Welt
+Hello wereld
 Hello mundo
 Hola mundo
 Ciao mondo

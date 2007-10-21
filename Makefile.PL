@@ -7,6 +7,7 @@ all_from        'lib/WWW/WorldLingo.pm';
 
 requires        "Class::Accessor::Fast"    => 0;
 requires        "HTTP::Request::Common"    => 0;
+requires        "HTTP::Response"      => 0;
 requires        "LWP::UserAgent"      => 0;
 requires        "Carp"                => 0;
 requires        "constant"            => 0;
